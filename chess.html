@@ -882,13 +882,23 @@ function toNotation(s, from, to, promo) {
   // Castling
   if (t === 'K') {
     const dc = col(to) - col(from);
-    if (dc === 2)  return 'O-O';
-    if (dc === -2) return 'O-O-O';
+    const base = dc === 2 ? 'O-O' : dc === -2 ? 'O-O-O' : null;
+    if (base) {
+      const tmp = cloneState(s);
+      applyMove(tmp, from, to, promo);
+      const sfx = isCheckmate(tmp) ? '#' : inCheck(tmp, tmp.turn) ? '+' : '';
+      return base + sfx;
+    }
   }
 
   const pref = t === 'P' ? (isCapture ? files[col(from)] : '') : t;
   const suf  = t === 'P' && (row(to) === 0 || row(to) === 7) ? '=' + (promo || 'Q') : '';
-  return pref + capStr + tSq + suf;
+  const base = pref + capStr + tSq + suf;
+
+  const tmp = cloneState(s);
+  applyMove(tmp, from, to, promo);
+  const sfx = isCheckmate(tmp) ? '#' : inCheck(tmp, tmp.turn) ? '+' : '';
+  return base + sfx;
 }
 
 // ═══════════════════════════════════════════
@@ -903,8 +913,22 @@ let flipped     = false;
 let aiDepth     = 1;
 let playerColor = 'w';
 let aiThinking  = false;
+let animating   = false;
 let snapshots   = [];
 let histPairs   = [];
+
+// ── Castling helpers for animation ──
+function isCastling(s, from, to) {
+  return typ(s.board[from]) === 'K' && Math.abs(col(to) - col(from)) === 2;
+}
+
+function getCastlingRook(color, toCol) {
+  if (color === 'w') {
+    return toCol === 6 ? [63, 61] : [56, 59];
+  } else {
+    return toCol === 6 ? [7, 5] : [0, 3];
+  }
+}
 
 // ── Reset ──
 function newGame() {
@@ -1084,11 +1108,67 @@ function renderAll() {
   renderCaptured();
 }
 
+function animatePiece(from, to, duration, onComplete) {
+  animating = true;
+
+  const fromEl  = document.querySelector(`.sq[data-sq="${from}"]`);
+  const toEl    = document.querySelector(`.sq[data-sq="${to}"]`);
+  const pieceEl = fromEl ? fromEl.querySelector('.piece') : null;
+
+  if (!pieceEl) {
+    animating = false;
+    onComplete();
+    return;
+  }
+
+  const fromRect = fromEl.getBoundingClientRect();
+  const toRect   = toEl.getBoundingClientRect();
+  const dx = toRect.left - fromRect.left;
+  const dy = toRect.top  - fromRect.top;
+
+  const clone = pieceEl.cloneNode(true);
+  clone.style.cssText = `
+    position: fixed;
+    left: ${fromRect.left}px;
+    top: ${fromRect.top}px;
+    width: ${fromRect.width}px;
+    height: ${fromRect.height}px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 100;
+    font-size: ${getComputedStyle(pieceEl).fontSize};
+  `;
+  document.body.appendChild(clone);
+
+  fromEl.innerHTML = '';
+
+  const targetPiece = toEl.querySelector('.piece');
+  if (targetPiece) {
+    targetPiece.style.transition = 'opacity 100ms linear';
+    targetPiece.style.opacity = '0';
+  }
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      clone.style.transition = `transform ${duration}ms cubic-bezier(0.25,0.46,0.45,0.94)`;
+      clone.style.transform  = `translate(${dx}px,${dy}px)`;
+    });
+  });
+
+  clone.addEventListener('transitionend', () => {
+    clone.remove();
+    animating = false;
+    onComplete();
+  }, { once: true });
+}
+
 // ═══════════════════════════════════════════
 //  Game Logic
 // ═══════════════════════════════════════════
 function onSqClick(e) {
-  if (aiThinking || state.turn !== playerColor) return;
+  if (aiThinking || animating || state.turn !== playerColor) return;
   const i = parseInt(e.currentTarget.dataset.sq);
   const piece = state.board[i];
 
@@ -1123,22 +1203,30 @@ function doMove(from, to, promo) {
   saveSnap();
   const notation = toNotation(state, from, to, promo);
   const prevTurn = state.turn;
-  applyMove(state, from, to, promo);
-  lastFrom = from; lastTo = to;
   selected = null; hints = [];
 
-  // Record in history
-  if (prevTurn === 'w') {
-    histPairs.push({ num: histPairs.length + 1, white: notation, black: '' });
+  const finish = () => {
+    applyMove(state, from, to, promo);
+    lastFrom = from; lastTo = to;
+    if (prevTurn === 'w') {
+      histPairs.push({ num: histPairs.length + 1, white: notation, black: '' });
+    } else {
+      if (histPairs.length > 0) histPairs[histPairs.length - 1].black = notation;
+      else histPairs.push({ num: 1, white: '', black: notation });
+    }
+    renderAll();
+    if (isCheckmate(state) || isStalemate(state)) { showEndModal(); return; }
+    if (state.turn !== playerColor) scheduleAI();
+  };
+
+  if (isCastling(state, from, to)) {
+    const [rookFrom, rookTo] = getCastlingRook(state.turn, col(to));
+    animatePiece(from, to, 220, () => {
+      animatePiece(rookFrom, rookTo, 180, finish);
+    });
   } else {
-    if (histPairs.length > 0) histPairs[histPairs.length - 1].black = notation;
-    else histPairs.push({ num: 1, white: '', black: notation });
+    animatePiece(from, to, 180, finish);
   }
-
-  renderAll();
-
-  if (isCheckmate(state) || isStalemate(state)) { showEndModal(); return; }
-  if (state.turn !== playerColor) scheduleAI();
 }
 
 function scheduleAI() {
@@ -1149,10 +1237,19 @@ function scheduleAI() {
   const delay = aiDepth === 1 ? 300 : aiDepth === 2 ? 500 : 800;
   setTimeout(() => {
     const mv = bestMove(state, aiDepth);
-    if (mv) {
+    setThinking(false);
+
+    if (!mv) {
+      aiThinking = false;
+      renderAll();
+      return;
+    }
+
+    const notation = toNotation(state, mv.from, mv.to, 'Q');
+    const prevTurn = state.turn;
+
+    const finish = () => {
       saveSnap();
-      const notation = toNotation(state, mv.from, mv.to, 'Q');
-      const prevTurn = state.turn;
       applyMove(state, mv.from, mv.to, 'Q');
       lastFrom = mv.from; lastTo = mv.to;
       if (prevTurn === 'w') {
@@ -1161,11 +1258,19 @@ function scheduleAI() {
         if (histPairs.length > 0) histPairs[histPairs.length - 1].black = notation;
         else histPairs.push({ num: 1, white: '', black: notation });
       }
+      aiThinking = false;
+      renderAll();
+      if (isCheckmate(state) || isStalemate(state)) showEndModal();
+    };
+
+    if (isCastling(state, mv.from, mv.to)) {
+      const [rookFrom, rookTo] = getCastlingRook(state.turn, col(mv.to));
+      animatePiece(mv.from, mv.to, 280, () => {
+        animatePiece(rookFrom, rookTo, 200, finish);
+      });
+    } else {
+      animatePiece(mv.from, mv.to, 280, finish);
     }
-    aiThinking = false;
-    setThinking(false);
-    renderAll();
-    if (isCheckmate(state) || isStalemate(state)) showEndModal();
   }, delay);
 }
 
@@ -1237,7 +1342,7 @@ function showPromo(from, to) {
 document.getElementById('btn-new').addEventListener('click', newGame);
 
 document.getElementById('btn-undo').addEventListener('click', () => {
-  if (aiThinking) return;
+  if (snapshots.length === 0 || aiThinking || animating) return;
   // If it's the player's turn, undo player move + preceding AI move (2 snaps)
   // If AI hasn't moved yet, undo 1 snap
   const undoCount = (state.turn === playerColor && snapshots.length >= 2) ? 2 : 1;

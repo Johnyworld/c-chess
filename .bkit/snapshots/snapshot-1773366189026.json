@@ -1,0 +1,46 @@
+{
+  "timestamp": "2026-03-13T01:43:09.024Z",
+  "reason": "compaction",
+  "status": {
+    "version": "2.0",
+    "lastUpdated": "2026-03-13T01:27:57.524Z",
+    "activeFeatures": [
+      "chess-game"
+    ],
+    "primaryFeature": "chess-game",
+    "features": {
+      "chess-game": {
+        "phase": "act",
+        "phaseNumber": 5,
+        "matchRate": null,
+        "iterationCount": 0,
+        "requirements": [],
+        "documents": {},
+        "timestamps": {
+          "started": "2026-03-13T01:27:57.524Z",
+          "lastUpdated": "2026-03-13T01:27:57.524Z"
+        },
+        "previousPhase": "check",
+        "autoAdvanced": true
+      }
+    },
+    "pipeline": {
+      "currentPhase": 1,
+      "level": "Dynamic",
+      "phaseHistory": []
+    },
+    "session": {
+      "startedAt": "2026-03-13T01:27:57.523Z",
+      "onboardingCompleted": false,
+      "lastActivity": "2026-03-13T01:27:57.524Z"
+    },
+    "history": [
+      {
+        "timestamp": "2026-03-13T01:27:57.524Z",
+        "feature": "chess-game",
+        "phase": "act",
+        "action": "updated"
+      }
+    ]
+  }
+}

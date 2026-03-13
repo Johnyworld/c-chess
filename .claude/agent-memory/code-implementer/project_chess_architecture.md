@@ -35,3 +35,13 @@ Reset `s.ep = null` FIRST, then set if double pawn push. This ensures ep is neve
 
 - `index.html`: `--accent: #7c5cfc`, `--sq-light: #2e2e40`, `--sq-dark: #1a1a26`
 - `chess.html`: `--accent: #7c6af7`, `--sq-light: #3d3452`, `--sq-dark: #1e1a2e`
+
+## Piece move animation (chess.html)
+
+Added in chess.html: `animatePiece(from, to, duration, onComplete)` — clones the `.piece` element to `document.body` as `position:fixed`, slides it via CSS `transform: translate(dx,dy)` with `cubic-bezier`, then calls `onComplete` in `transitionend`. Uses a global `animating` flag (same pattern as `aiThinking`) to block user input during animation.
+
+Key design decisions:
+- `doMove` / `scheduleAI` now defer `applyMove` + `renderAll` until after animation completes (inside `finish` callback). This means board state is mutated only after the piece visually arrives.
+- Castling animates king first (220ms player / 280ms AI), then rook (180ms / 200ms), each as a separate `animatePiece` call chained via callback.
+- `isCastling(s, from, to)` checks king type + column distance 2. Must be called BEFORE `applyMove` (state still has original king position).
+- `getCastlingRook(color, toCol)` returns `[rookFrom, rookTo]` logical board indices for white/black kingside (toCol=6) and queenside (toCol=2/3).
