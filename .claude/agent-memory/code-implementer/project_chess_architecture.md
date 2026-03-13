@@ -36,12 +36,32 @@ Reset `s.ep = null` FIRST, then set if double pawn push. This ensures ep is neve
 - `index.html`: `--accent: #7c5cfc`, `--sq-light: #2e2e40`, `--sq-dark: #1a1a26`
 - `chess.html`: `--accent: #7c6af7`, `--sq-light: #3d3452`, `--sq-dark: #1e1a2e`
 
+## Rendering: Canvas (chess.html)
+
+chess.html uses `<canvas id="board">` with `SQ = 72` (px per square), total `576×576px`.
+
+4-layer render order in `renderCanvas()`:
+1. `drawBoard(ctx)` — fills each square with hardcoded hex (`'#1e1a2e'` dark, `'#3d3452'` light)
+2. `drawOverlays(ctx)` — last-move, selected, hint dots/rings, in-check king highlight
+3. `drawPieces(ctx)` — all static pieces (skipping `animFrom` set)
+4. `drawAnimatingPiece(x, y, piece)` — called during rAF loop, draws moving piece on top
+
+Helper layout:
+- `sqX(i)`, `sqY(i)`: top-left pixel of square `i`, flipped-aware
+- `sqCenterX/Y(i)`: center pixel
+- `fillSq(ctx, i, color)`: fill whole square with color
+- `pixelToSq(x, y)`: canvas-relative click → logical board index (flipped-aware)
+
+`animFrom` is a `Set<number>` of board indices currently being animated. `drawPieces` skips any index in this set. For castling, king and rook are added/deleted as their animations start/complete.
+
 ## Piece move animation (chess.html)
 
-Added in chess.html: `animatePiece(from, to, duration, onComplete)` — clones the `.piece` element to `document.body` as `position:fixed`, slides it via CSS `transform: translate(dx,dy)` with `cubic-bezier`, then calls `onComplete` in `transitionend`. Uses a global `animating` flag (same pattern as `aiThinking`) to block user input during animation.
+`animatePiece(from, to, duration, onComplete)` — requestAnimationFrame loop, ease-out-quad easing (`1-(1-p)²`). Calls `renderCanvas()` each frame then `drawAnimatingPiece` on top.
 
 Key design decisions:
-- `doMove` / `scheduleAI` now defer `applyMove` + `renderAll` until after animation completes (inside `finish` callback). This means board state is mutated only after the piece visually arrives.
-- Castling animates king first (220ms player / 280ms AI), then rook (180ms / 200ms), each as a separate `animatePiece` call chained via callback.
-- `isCastling(s, from, to)` checks king type + column distance 2. Must be called BEFORE `applyMove` (state still has original king position).
-- `getCastlingRook(color, toCol)` returns `[rookFrom, rookTo]` logical board indices for white/black kingside (toCol=6) and queenside (toCol=2/3).
+- `animFrom.add(from)` at start; `animFrom.delete(from)` at completion. `animating = false` only when `animFrom.size === 0`.
+- `doMove` / `scheduleAI` defer `applyMove` + `renderAll` until after animation completes (inside `finish` callback). Board state mutated only after piece visually arrives.
+- Castling: king first (220ms player / 280ms AI), then rook (180ms / 200ms), chained via callback. Both can be in `animFrom` simultaneously during the brief transition between animations.
+- `isCastling(s, from, to)` must be called BEFORE `applyMove` (state still has original king position).
+- `getCastlingRook(color, toCol)` returns `[rookFrom, rookTo]` for white/black kingside (toCol=6) and queenside (toCol=2/3).
+- Click handled by `onCanvasClick` (mousedown), uses `pixelToSq` to convert event coords to board index. Blocked when `animating || aiThinking`.

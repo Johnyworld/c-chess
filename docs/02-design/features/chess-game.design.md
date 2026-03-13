@@ -49,9 +49,7 @@ chess.html
 ├── <style>
 │   ├── CSS Custom Properties (:root)
 │   ├── Layout (body, .panel, .board-wrap)
-│   ├── Board & Squares (#board, .sq, .light, .dark)
-│   ├── State Classes (.selected, .hint, .hint-cap, .last-from, .last-to, .in-check)
-│   ├── Pieces (.piece, .wp, .bp)
+│   ├── Board Canvas (#board — canvas 요소)
 │   ├── UI Components (.card, .btn, .diff-btn, .history-list)
 │   ├── Modals (.overlay, .modal, .promo-row)
 │   └── Responsive (@media max-width: 820px)
@@ -68,12 +66,12 @@ chess.html
 │   │   ├── .thinking-bar#tbar > .thinking-fill#tfill
 │   │   └── .board-outer
 │   │       ├── .rank-labels#rlabels
-│   │       ├── #board (JS가 64개 .sq div 동적 생성)
+│   │       ├── <canvas id="board">  ← DOM div 대신 Canvas 사용
 │   │       └── .file-labels#flabels
 │   ├── #end-overlay (게임 종료 모달)
 │   └── #promo-overlay (프로모션 선택 모달)
 └── <script>
-    ├── [Constants]   SYM, VAL, PST
+    ├── [Constants]   SYM, VAL, PST, SQ (칸 크기 상수)
     ├── [State]       makeState, setupBoard, cloneState
     ├── [Helpers]     row, col, idx, clr, typ, opp
     ├── [Engine]      attackSquares, attacksSquare, inCheck
@@ -81,22 +79,26 @@ chess.html
     │                 allLegalMoves, isCheckmate, isStalemate
     ├── [AI]          evaluate, minimax, bestMove
     ├── [Notation]    toNotation
-    ├── [UI]          buildBoard, buildLabels, renderAll
-    │                 renderSquares, renderStatus, renderHistory, renderCaptured
+    ├── [Canvas UI]   initCanvas, renderAll
+    │                 drawBoard, drawPieces, drawOverlays
+    │                 drawAnimatingPiece, pixelToSq
+    │                 renderStatus, renderHistory, renderCaptured
     │                 setThinking
+    ├── [Animation]   animatePiece, isCastling, getCastlingRook
     ├── [Game Flow]   newGame, saveSnap, restoreSnap
-    │                 onSqClick, doMove, scheduleAI
+    │                 onCanvasClick, doMove, scheduleAI
     │                 showEndModal, showPromo
-    └── [Init]        buildBoard() + newGame()
+    └── [Init]        initCanvas() + newGame()
 ```
 
 ### 2.2 데이터 흐름
 
 ```
-사용자 클릭
+사용자 클릭 (Canvas mousedown)
     │
     ▼
-onSqClick(e)
+onCanvasClick(e)
+    │  pixelToSq(x, y) → sq
     │
     ├─ [말 선택] → legalMoves(state, sq) → hints 저장 → renderAll()
     │
@@ -106,20 +108,23 @@ onSqClick(e)
                             │
                             ├─ saveSnap()
                             ├─ toNotation() → histPairs 갱신
-                            ├─ applyMove(state, from, to, promo)
-                            ├─ renderAll()
-                            ├─ [게임 종료?] → showEndModal()
-                            └─ [AI 차례?] → scheduleAI()
-                                                │
-                                                ├─ setThinking(true)
-                                                ├─ setTimeout(fn, delay)
-                                                │       │
-                                                │       ├─ bestMove(state, depth)
-                                                │       │       └─ minimax() 재귀
-                                                │       ├─ saveSnap()
-                                                │       ├─ applyMove()
-                                                │       └─ renderAll()
-                                                └─ setThinking(false)
+                            ├─ animatePiece(from, to, 180ms, finish)
+                            │       └─ requestAnimationFrame 루프
+                            │            └─ drawAnimatingPiece (ease-out-quad)
+                            └─ finish():
+                                    ├─ applyMove(state, from, to, promo)
+                                    ├─ renderAll()
+                                    ├─ [게임 종료?] → showEndModal()
+                                    └─ [AI 차례?] → scheduleAI()
+                                                        │
+                                                        ├─ setThinking(true)
+                                                        ├─ setTimeout(fn, delay)
+                                                        │       │
+                                                        │       ├─ bestMove(state, depth)
+                                                        │       │       └─ minimax() 재귀
+                                                        │       ├─ saveSnap()
+                                                        │       └─ animatePiece(from, to, 280ms, finish)
+                                                        └─ setThinking(false)
 ```
 
 ### 2.3 함수 의존성
@@ -381,16 +386,61 @@ State를 직접 변이 (clone 없이).
 | `.last-to`   | 직전 이동 도착                  | `--sq-last` 오버레이  |
 | `.in-check`  | 체크 중인 킹 위치               | `--sq-check` 오버레이 |
 
-### 5.3 기물 렌더링
+### 5.3 Canvas 보드 렌더링 (FR-13)
+
+체스판은 `<canvas id="board">` 요소로 렌더링한다. DOM div 방식을 사용하지 않는다.
 
 ```
-흰 기물:  <span class="piece wp">♔</span>
-          color: #f0eeff
-          filter: drop-shadow(0 1px 2px #000)
+const SQ = 72;          // 칸 크기 (px), 보드 전체 = SQ * 8 = 576px
+canvas.width = canvas.height = SQ * 8;
 
-검 기물:  <span class="piece bp">♚</span>
-          color: #c8b8ff
-          filter: drop-shadow(0 1px 2px #000)
+─── 렌더링 레이어 순서 ───────────────────────────────────
+1. drawBoard(ctx)       — 64개 칸 배경색 (light/dark)
+2. drawOverlays(ctx)    — selected / hint / hint-cap / last-from / last-to / in-check
+3. drawPieces(ctx)      — 정지 기물 (애니메이션 중인 기물 제외)
+4. drawAnimatingPiece(ctx, piece, x, y)  — 이동 중 기물 (최상위 레이어)
+──────────────────────────────────────────────────────────
+
+drawBoard(ctx):
+  for i in 0..63:
+    r, c = row(i), col(i)
+    ctx.fillStyle = (r + c) % 2 === 0 ? SQ_LIGHT : SQ_DARK
+    ctx.fillRect(c * SQ, r * SQ, SQ, SQ)
+
+drawPieces(ctx):
+  ctx.font = '${SQ * 0.72}px serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  for i in 0..63:
+    if animating && i === animFrom: continue  // 이동 중 기물 제외
+    piece = state.board[i]
+    if !piece: continue
+    ctx.fillStyle = clr(piece) === 'w' ? '#f0eeff' : '#c8b8ff'
+    ctx.shadowColor = '#000'
+    ctx.shadowBlur = 3
+    ctx.fillText(SYM[piece], c*SQ + SQ/2, r*SQ + SQ/2)
+
+drawOverlays(ctx):
+  // selected 칸: rgba(124,106,247,.55)
+  // hint 칸 (빈 칸): 원형 점 (반지름 SQ*0.15)
+  // hint-cap 칸: 링 (외곽 SQ*0.48, 두께 SQ*0.1)
+  // last-from / last-to: rgba(124,106,247,.25)
+  // in-check 킹: rgba(220,60,60,.55)
+
+pixelToSq(x, y):  // Canvas 클릭 좌표 → 보드 인덱스
+  c = Math.floor(x / SQ)
+  r = Math.floor(y / SQ)
+  if flipped: r = 7 - r, c = 7 - c
+  return r * 8 + c
+```
+
+**기물 유니코드 심볼:**
+
+```js
+const SYM = {
+  wK:'♔', wQ:'♕', wR:'♖', wB:'♗', wN:'♘', wP:'♙',
+  bK:'♚', bQ:'♛', bR:'♜', bB:'♝', bN:'♞', bP:'♟'
+}
 ```
 
 ### 5.4 모달 설계
@@ -418,9 +468,73 @@ State를 직접 변이 (clone 없이).
                  클릭 시: 모달 닫기 + doMove(from, to, piece)
 ```
 
-### 5.5 기물 움직임 설계
+### 5.5 기물 이동 애니메이션 설계 (FR-14)
 
-- 모든 기물은 움직일 때, ease 애니메이션 으로 움직인다.
+모든 기물은 이동 시 출발 칸에서 도착 칸으로 부드럽게 슬라이드한다.
+
+**애니메이션 흐름:**
+
+```
+doMove(from, to, promo) 또는 scheduleAI():
+  1. animFrom = from  (drawPieces에서 해당 기물 제외)
+  2. animatePiece(from, to, duration, finish)
+  3. finish():
+       applyMove(state, from, to, promo)
+       animFrom = null
+       renderAll()
+       animating = false
+```
+
+**`animatePiece(from, to, duration, onComplete)` 구현:**
+
+```js
+function animatePiece(from, to, duration, onComplete) {
+  animating = true;
+  animFrom = from;
+  const piece = state.board[from];
+  const startX = col(from) * SQ + SQ/2,  startY = row(from) * SQ + SQ/2;
+  const endX   = col(to)   * SQ + SQ/2,  endY   = row(to)   * SQ + SQ/2;
+  const t0 = performance.now();
+
+  function frame(now) {
+    const p = Math.min((now - t0) / duration, 1);
+    const ease = 1 - (1 - p) * (1 - p);  // ease-out-quad
+    const x = startX + (endX - startX) * ease;
+    const y = startY + (endY - startY) * ease;
+
+    renderAll({ skipPiece: from });       // 보드 + 오버레이 + 나머지 기물
+    drawAnimatingPiece(ctx, piece, x, y); // 이동 중 기물 최상위 렌더
+
+    if (p < 1) requestAnimationFrame(frame);
+    else { animating = false; animFrom = null; onComplete(); }
+  }
+  requestAnimationFrame(frame);
+}
+```
+
+**easing**: `ease-out-quad` — `1 - (1-p)²` (감속 곡선, 자연스러운 마무리)
+
+**애니메이션 시간:**
+
+| 이동 주체 | 일반 이동 | 캐슬링 킹 | 캐슬링 룩 |
+| --------- | --------- | --------- | --------- |
+| 플레이어  | 180ms     | 220ms     | 180ms     |
+| AI        | 280ms     | 280ms     | 200ms     |
+
+**캐슬링 순차 애니메이션:**
+
+```
+킹 애니메이션 완료 콜백 → 룩 애니메이션 시작 → 룩 완료 콜백 → finish()
+```
+
+**입력 차단:**
+
+```js
+// onCanvasClick 상단, Undo 버튼 핸들러 상단
+if (animating || aiThinking) return;
+```
+
+**Undo**: 애니메이션 없이 즉시 이전 스냅샷으로 복원 (`restoreSnap()` → `renderAll()`).
 
 ---
 
@@ -598,8 +712,8 @@ chess.html   (단일 파일, 전체 구현 포함)
 
 ### 11.2 구현 순서 (의존성 기반)
 
-1. [ ] HTML 뼈대 + CSS 스타일 (`:root`, 레이아웃, 보드, 기물, 모달)
-2. [ ] `SYM`, `VAL`, `PST` 상수 정의
+1. [ ] HTML 뼈대 + CSS 스타일 (`:root`, 레이아웃, `<canvas id="board">`, 모달)
+2. [ ] `SYM`, `VAL`, `PST`, `SQ` 상수 정의
 3. [ ] `makeState`, `setupBoard`, `cloneState`, 헬퍼 함수
 4. [ ] `attackSquares` (일반 이동 생성)
 5. [ ] `attacksSquare` (단일 공격 감지)
@@ -609,12 +723,15 @@ chess.html   (단일 파일, 전체 구현 포함)
 9. [ ] `legalMoves`, `allLegalMoves`
 10. [ ] `isCheckmate`, `isStalemate`
 11. [ ] `evaluate`, `minimax`, `bestMove` (AI)
-12. [ ] `toNotation` (표기법)
-13. [ ] `buildBoard`, `buildLabels`, `renderAll` 계열 (UI)
-14. [ ] `newGame`, `saveSnap`, `restoreSnap` (게임 흐름)
-15. [ ] `onSqClick`, `doMove`, `scheduleAI` (이벤트)
-16. [ ] `showEndModal`, `showPromo` (모달)
-17. [ ] 이벤트 리스너 연결 + `buildBoard()` + `newGame()` 초기화
+12. [ ] `toNotation` (체크/체크메이트 접미어 포함)
+13. [ ] `initCanvas`, `drawBoard`, `drawOverlays`, `drawPieces` (Canvas 렌더링)
+14. [ ] `drawAnimatingPiece`, `pixelToSq` (Canvas 애니메이션/입력)
+15. [ ] `renderAll`, `renderStatus`, `renderHistory`, `renderCaptured`, `setThinking`
+16. [ ] `animatePiece`, `isCastling`, `getCastlingRook` (애니메이션 로직)
+17. [ ] `newGame`, `saveSnap`, `restoreSnap` (게임 흐름)
+18. [ ] `onCanvasClick`, `doMove`, `scheduleAI` (이벤트)
+19. [ ] `showEndModal`, `showPromo` (모달)
+20. [ ] Canvas `mousedown` 이벤트 연결 + `initCanvas()` + `newGame()` 초기화
 
 ---
 

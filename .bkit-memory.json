@@ -1,7 +1,7 @@
 {
-  "feature": "piece-animation",
+  "feature": "chess-game",
   "phase": "do",
   "updatedAt": "2026-03-13T00:00:00Z",
-  "planPath": "docs/01-plan/features/piece-animation.plan.md",
-  "designPath": "docs/02-design/features/piece-animation.design.md"
+  "planPath": "docs/01-plan/features/chess-game.plan.md",
+  "designPath": "docs/02-design/features/chess-game.design.md"
 }

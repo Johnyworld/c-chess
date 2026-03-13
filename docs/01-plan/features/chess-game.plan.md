@@ -55,6 +55,7 @@
 - [x] 캡처된 기물 표시 (흰/검 분리)
 - [x] 보드 플립 (흑 시점 전환)
 - [x] AI Thinking bar 애니메이션
+- [x] 기물 이동 시 부드러운 슬라이드 애니메이션 (CSS transition)
 - [x] Linear 다크 테마 UI
 - [x] 반응형 레이아웃 (모바일 세로 스택)
 
@@ -88,6 +89,8 @@
 | FR-10 | 보드 플립: 흑 시점 전환, 레이블 재생성                          | Low      | Done   |
 | FR-11 | AI Thinking 진행 바 애니메이션                                  | Low      | Done   |
 | FR-12 | New Game 버튼으로 언제든 재시작 가능                            | High     | Done   |
+| FR-13 | 체스판은 HTML Canvas로 렌더링                                   | High     | Pending |
+| FR-14 | 기물 이동 시 출발 → 도착 칸 부드러운 슬라이드 애니메이션 (CSS transition, 200ms) | Medium | Done |
 
 ### 3.2 Non-Functional Requirements
 
@@ -150,6 +153,8 @@
 | 파일 구조   | 단일 파일 / 멀티 파일   | 단일 HTML            | Zero-setup 배포, 오프라인 동작         |
 | 엔진 패턴   | 클래스 기반 / 순수 함수 | 순수 함수            | 테스트·디버그 용이, 상태 클로닝 단순화 |
 | 보드 표현   | 2D Array / flat Array   | flat Array(64)       | 인덱스 연산 단순, 캐싱 친화적          |
+| 보드 렌더링 | DOM div / Canvas        | Canvas               | 픽셀 단위 제어, 애니메이션 성능 우수   |
+| 기물 이동   | 순간이동 / CSS transition | CSS transition       | 자연스러운 슬라이드, 외부 의존성 없음  |
 | AI 알고리즘 | Random / Minimax / MCTS | Minimax + α-β + PST  | 합리적 강도, 구현 복잡도 균형          |
 | 스타일링    | 인라인 / `<style>`      | `<style>` 태그       | 단일 파일 내 CSS 커스텀 프로퍼티 활용  |
 | 외부 폰트   | 없음 / Google Fonts     | Google Fonts (Inter) | 가독성, CDN 단일 요청                  |

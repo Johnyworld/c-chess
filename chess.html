@@ -177,7 +177,7 @@
     }
 
     .thinking-bar {
-      width: 512px; height: 2px;
+      width: 576px; height: 2px;
       background: var(--surface2);
       border-radius: 1px;
       overflow: hidden;
@@ -200,7 +200,7 @@
       display: flex;
       flex-direction: column;
       width: 18px;
-      height: 512px;
+      height: 576px;
     }
     .rank-labels span {
       flex: 1;
@@ -213,7 +213,7 @@
     }
     .file-labels {
       display: flex;
-      width: 512px;
+      width: 576px;
       padding-left: 18px;
     }
     .file-labels span {
@@ -226,84 +226,14 @@
     }
 
     #board {
-      width: 512px;
-      height: 512px;
-      display: grid;
-      grid-template-columns: repeat(8, 64px);
-      grid-template-rows: repeat(8, 64px);
-      border-radius: 8px;
-      overflow: hidden;
+      display: block;
+      border-radius: 6px;
+      cursor: pointer;
       border: 1px solid var(--border);
       box-shadow:
         0 0 0 1px var(--border),
         0 24px 64px rgba(0,0,0,.65),
         0 0 80px rgba(124,106,247,.06);
-    }
-
-    .sq {
-      width: 64px; height: 64px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 40px;
-      cursor: pointer;
-      position: relative;
-      user-select: none;
-      transition: filter .1s;
-    }
-    .sq.light { background: var(--sq-light); }
-    .sq.dark  { background: var(--sq-dark); }
-    .sq.selected { background: var(--sq-sel) !important; }
-    .sq.last-from, .sq.last-to { background: var(--sq-last) !important; }
-    .sq.in-check  { background: var(--sq-check) !important; }
-
-    /* move dot */
-    .sq.hint::after {
-      content: '';
-      position: absolute;
-      width: 28%;
-      height: 28%;
-      border-radius: 50%;
-      background: rgba(124,106,247,.65);
-      pointer-events: none;
-    }
-    /* capture ring */
-    .sq.hint-cap::after {
-      content: '';
-      position: absolute;
-      inset: 4px;
-      border-radius: 50%;
-      border: 4px solid rgba(124,106,247,.6);
-      pointer-events: none;
-    }
-
-    .sq:hover { filter: brightness(1.2); }
-    .sq.selected:hover, .sq.hint:hover, .sq.hint-cap:hover { filter: brightness(1.1); }
-
-    /* pieces */
-    .piece {
-      position: relative;
-      z-index: 1;
-      line-height: 1;
-      pointer-events: none;
-    }
-    .piece.wp {
-      color: #f0eeff;
-      filter:
-        drop-shadow(0 1px 0 #000)
-        drop-shadow(0 -1px 0 #000)
-        drop-shadow(1px 0 0 #000)
-        drop-shadow(-1px 0 0 #000)
-        drop-shadow(0 2px 3px rgba(0,0,0,.7));
-    }
-    .piece.bp {
-      color: #c8b8ff;
-      filter:
-        drop-shadow(0 1px 0 #000)
-        drop-shadow(0 -1px 0 #000)
-        drop-shadow(1px 0 0 #000)
-        drop-shadow(-1px 0 0 #000)
-        drop-shadow(0 2px 4px rgba(0,0,0,.9));
     }
 
     /* overlay */
@@ -422,7 +352,7 @@
   <div class="thinking-bar" id="tbar"><div class="thinking-fill" id="tfill"></div></div>
   <div class="board-outer">
     <div class="rank-labels" id="rlabels"></div>
-    <div id="board"></div>
+    <canvas id="board"></canvas>
   </div>
   <div class="file-labels" id="flabels"></div>
 </div>
@@ -914,8 +844,14 @@ let aiDepth     = 1;
 let playerColor = 'w';
 let aiThinking  = false;
 let animating   = false;
+let animFrom    = new Set(); // squares currently being animated (excluded from drawPieces)
 let snapshots   = [];
 let histPairs   = [];
+
+// ── Canvas constants ──
+const SQ = 72;
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
 
 // ── Castling helpers for animation ──
 function isCastling(s, from, to) {
@@ -964,26 +900,122 @@ function restoreSnap(snap) {
 }
 
 // ═══════════════════════════════════════════
-//  Board DOM
+//  Canvas Board
 // ═══════════════════════════════════════════
-function buildBoard() {
-  const boardEl = document.getElementById('board');
-  boardEl.innerHTML = '';
 
-  for (let vr = 0; vr < 8; vr++) {
-    for (let vc = 0; vc < 8; vc++) {
-      const sq = document.createElement('div');
-      sq.className = 'sq';
-      const logR = flipped ? 7 - vr : vr;
-      const logC = flipped ? 7 - vc : vc;
-      sq.dataset.sq = idx(logR, logC);
-      // a8 (r=0,c=0) is dark; (r+c) even => dark
-      sq.classList.add((logR + logC) % 2 === 0 ? 'dark' : 'light');
-      sq.addEventListener('click', onSqClick);
-      boardEl.appendChild(sq);
+// ── Pixel coordinate helpers ──
+function sqX(i) {
+  const c = flipped ? 7 - col(i) : col(i);
+  return c * SQ;
+}
+function sqY(i) {
+  const r = flipped ? 7 - row(i) : row(i);
+  return r * SQ;
+}
+function sqCenterX(i) { return sqX(i) + SQ / 2; }
+function sqCenterY(i) { return sqY(i) + SQ / 2; }
+
+function fillSq(context, i, color) {
+  context.fillStyle = color;
+  context.fillRect(sqX(i), sqY(i), SQ, SQ);
+}
+
+// ── Canvas click → board index ──
+function pixelToSq(x, y) {
+  const vc = (x / SQ) | 0;
+  const vr = (y / SQ) | 0;
+  if (vc < 0 || vc > 7 || vr < 0 || vr > 7) return -1;
+  const logC = flipped ? 7 - vc : vc;
+  const logR = flipped ? 7 - vr : vr;
+  return idx(logR, logC);
+}
+
+// ── Draw layers ──
+function drawBoard(context) {
+  for (let i = 0; i < 64; i++) {
+    const r = row(i), c = col(i);
+    // (r+c) even => dark (a8 is dark)
+    context.fillStyle = (r + c) % 2 === 0 ? '#1e1a2e' : '#3d3452';
+    context.fillRect(sqX(i), sqY(i), SQ, SQ);
+  }
+}
+
+function drawOverlays(context) {
+  // last-from / last-to
+  if (lastFrom !== null) fillSq(context, lastFrom, 'rgba(124,106,247,.25)');
+  if (lastTo   !== null) fillSq(context, lastTo,   'rgba(124,106,247,.25)');
+  // selected
+  if (selected !== null) fillSq(context, selected, 'rgba(124,106,247,.55)');
+  // hints
+  for (const h of hints) {
+    const cx = sqCenterX(h), cy = sqCenterY(h);
+    const isEp = state.ep === h && !state.board[h];
+    if (state.board[h] || isEp) {
+      // hint-cap: ring
+      context.strokeStyle = 'rgba(124,106,247,.7)';
+      context.lineWidth = SQ * 0.1;
+      context.beginPath();
+      context.arc(cx, cy, SQ * 0.43, 0, Math.PI * 2);
+      context.stroke();
+    } else {
+      // hint: dot
+      context.fillStyle = 'rgba(124,106,247,.5)';
+      context.beginPath();
+      context.arc(cx, cy, SQ * 0.15, 0, Math.PI * 2);
+      context.fill();
     }
   }
-  buildLabels();
+  // in-check king highlight
+  if (inCheck(state, state.turn)) {
+    for (let i = 0; i < 64; i++) {
+      if (state.board[i] === state.turn + 'K') {
+        fillSq(context, i, 'rgba(220,60,60,.55)');
+        break;
+      }
+    }
+  }
+}
+
+function drawPieces(context) {
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.font = `${SQ * 0.72}px serif`;
+  for (let i = 0; i < 64; i++) {
+    if (!state.board[i]) continue;
+    if (animFrom.has(i)) continue; // skip animating piece
+    const piece = state.board[i];
+    const isWhite = clr(piece) === 'w';
+    context.shadowColor = '#000';
+    context.shadowBlur = 3;
+    context.fillStyle = isWhite ? '#f0eeff' : '#c8b8ff';
+    context.fillText(SYM[piece], sqCenterX(i), sqCenterY(i) + SQ * 0.04);
+  }
+  context.shadowBlur = 0;
+}
+
+function drawAnimatingPiece(x, y, piece) {
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `${SQ * 0.72}px serif`;
+  const isWhite = clr(piece) === 'w';
+  ctx.shadowColor = '#000';
+  ctx.shadowBlur = 3;
+  ctx.fillStyle = isWhite ? '#f0eeff' : '#c8b8ff';
+  ctx.fillText(SYM[piece], x, y + SQ * 0.04);
+  ctx.shadowBlur = 0;
+}
+
+function renderCanvas() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawBoard(ctx);
+  drawOverlays(ctx);
+  drawPieces(ctx);
+}
+
+function initCanvas() {
+  canvas.width  = SQ * 8;
+  canvas.height = SQ * 8;
+  canvas.addEventListener('mousedown', onCanvasClick);
 }
 
 function buildLabels() {
@@ -1010,36 +1042,6 @@ function buildLabels() {
   });
 }
 
-function renderSquares() {
-  document.querySelectorAll('.sq').forEach(sqEl => {
-    const i = parseInt(sqEl.dataset.sq);
-
-    sqEl.classList.remove('selected','hint','hint-cap','last-from','last-to','in-check');
-
-    if (lastFrom !== null && i === lastFrom) sqEl.classList.add('last-from');
-    if (lastTo   !== null && i === lastTo)   sqEl.classList.add('last-to');
-    if (selected === i) sqEl.classList.add('selected');
-    if (hints.includes(i)) {
-      sqEl.classList.add(state.board[i] ? 'hint-cap' : 'hint');
-    }
-    // En passant target is an empty square but is a capture hint
-    if (hints.includes(i) && state.ep === i) {
-      sqEl.classList.remove('hint');
-      sqEl.classList.add('hint-cap');
-    }
-    if (inCheck(state, state.turn) && state.board[i] === state.turn + 'K') {
-      sqEl.classList.add('in-check');
-    }
-
-    if (state.board[i]) {
-      const sym = SYM[state.board[i]];
-      const cls = clr(state.board[i]) === 'w' ? 'wp' : 'bp';
-      sqEl.innerHTML = `<span class="piece ${cls}">${sym}</span>`;
-    } else {
-      sqEl.innerHTML = '';
-    }
-  });
-}
 
 function renderStatus() {
   const dot   = document.getElementById('dot');
@@ -1102,7 +1104,7 @@ function renderCaptured() {
 }
 
 function renderAll() {
-  renderSquares();
+  renderCanvas();
   renderStatus();
   renderHistory();
   renderCaptured();
@@ -1110,66 +1112,51 @@ function renderAll() {
 
 function animatePiece(from, to, duration, onComplete) {
   animating = true;
+  animFrom.add(from);
 
-  const fromEl  = document.querySelector(`.sq[data-sq="${from}"]`);
-  const toEl    = document.querySelector(`.sq[data-sq="${to}"]`);
-  const pieceEl = fromEl ? fromEl.querySelector('.piece') : null;
-
-  if (!pieceEl) {
+  const piece = state.board[from];
+  if (!piece) {
     animating = false;
+    animFrom.delete(from);
     onComplete();
     return;
   }
 
-  const fromRect = fromEl.getBoundingClientRect();
-  const toRect   = toEl.getBoundingClientRect();
-  const dx = toRect.left - fromRect.left;
-  const dy = toRect.top  - fromRect.top;
+  const f = flipped;
+  const startX = (f ? 7 - col(from) : col(from)) * SQ + SQ / 2;
+  const startY = (f ? 7 - row(from) : row(from)) * SQ + SQ / 2;
+  const endX   = (f ? 7 - col(to)   : col(to))   * SQ + SQ / 2;
+  const endY   = (f ? 7 - row(to)   : row(to))    * SQ + SQ / 2;
+  const t0 = performance.now();
 
-  const clone = pieceEl.cloneNode(true);
-  clone.style.cssText = `
-    position: fixed;
-    left: ${fromRect.left}px;
-    top: ${fromRect.top}px;
-    width: ${fromRect.width}px;
-    height: ${fromRect.height}px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-    z-index: 100;
-    font-size: ${getComputedStyle(pieceEl).fontSize};
-  `;
-  document.body.appendChild(clone);
-
-  fromEl.innerHTML = '';
-
-  const targetPiece = toEl.querySelector('.piece');
-  if (targetPiece) {
-    targetPiece.style.transition = 'opacity 100ms linear';
-    targetPiece.style.opacity = '0';
+  function frame(now) {
+    const p = Math.min((now - t0) / duration, 1);
+    const ease = 1 - (1 - p) * (1 - p); // ease-out-quad
+    const x = startX + (endX - startX) * ease;
+    const y = startY + (endY - startY) * ease;
+    renderCanvas();
+    drawAnimatingPiece(x, y, piece);
+    if (p < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      animFrom.delete(from);
+      if (animFrom.size === 0) animating = false;
+      onComplete();
+    }
   }
-
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      clone.style.transition = `transform ${duration}ms cubic-bezier(0.25,0.46,0.45,0.94)`;
-      clone.style.transform  = `translate(${dx}px,${dy}px)`;
-    });
-  });
-
-  clone.addEventListener('transitionend', () => {
-    clone.remove();
-    animating = false;
-    onComplete();
-  }, { once: true });
+  requestAnimationFrame(frame);
 }
 
 // ═══════════════════════════════════════════
 //  Game Logic
 // ═══════════════════════════════════════════
-function onSqClick(e) {
+function onCanvasClick(e) {
   if (aiThinking || animating || state.turn !== playerColor) return;
-  const i = parseInt(e.currentTarget.dataset.sq);
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const i = pixelToSq(x, y);
+  if (i < 0) return;
   const piece = state.board[i];
 
   if (selected === null) {
@@ -1355,7 +1342,7 @@ document.getElementById('btn-undo').addEventListener('click', () => {
 
 document.getElementById('btn-flip').addEventListener('click', () => {
   flipped = !flipped;
-  buildBoard();
+  buildLabels();
   renderAll();
 });
 
@@ -1370,7 +1357,8 @@ document.querySelectorAll('.diff-btn').forEach(btn => {
 });
 
 // ── Init ──
-buildBoard();
+initCanvas();
+buildLabels();
 newGame();
 </script>
 </body>
